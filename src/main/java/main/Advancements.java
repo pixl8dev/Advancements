@@ -347,8 +347,14 @@ public class Advancements extends PlaceholderExpansion{
         }
         //Get all advancements and order by categories
         for (Advancement adv : advancementsList) {
+            String key = adv.getKey().getKey();
+
+            //Ignore recipes again
+            if (key.toLowerCase().startsWith("recipes")) {
+                continue;
+            }
+
             for (String category : categories) {
-                String key = adv.getKey().getKey();
                 if (key.startsWith(category)) {
                     advancements.add(key);
                 }
