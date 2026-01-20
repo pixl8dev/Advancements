@@ -61,7 +61,7 @@ public class Advancements extends PlaceholderExpansion{
      */
     @Override
     public String getVersion(){
-        return "1.4";
+        return "1.5";
     }
     
     
@@ -466,16 +466,7 @@ public class Advancements extends PlaceholderExpansion{
                 break;
             }
         }
-        if(player==null){
-            throw new NoPlayerOnline();
-        }
-        AdvancementProgress prog;
-        try{
-            prog = player.getAdvancementProgress(ach);
-        }catch(IllegalArgumentException e){
-            return null;
-        }
-        return prog.isDone();
+        return hasAdvancement(player, ach);
     }
     //Check if player have specific advancement
     public static Boolean hasAdvancement(Player player, Advancement advancement) throws NoPlayerOnline {
