@@ -12,7 +12,7 @@ import org.bukkit.entity.Player;
 
 public class Advancements extends PlaceholderExpansion{
 
-
+    private static final List<String> VANILLA_CATEGORIES = Arrays.asList("nether","story","adventure","end","husbandry");
     /**
      * This method should always return true unless we
      * have a dependency we need to make sure is on the server
@@ -388,6 +388,7 @@ public class Advancements extends PlaceholderExpansion{
         Set<String> categories=new HashSet<>();
         HashMap<String,Integer> categoriesAmountCompleted=new HashMap<>();
         HashMap<String,Integer> categoriesAmountRemaining=new HashMap<>();
+        boolean isVanillaCategory = category.equalsIgnoreCase("vanilla");
 
         List<Advancement> advancements = new ArrayList<>();
         Bukkit.getServer().advancementIterator().forEachRemaining(advancements::add);
@@ -422,14 +423,19 @@ public class Advancements extends PlaceholderExpansion{
             categoriesAmountRemaining.put(cat, remaining);
         }
         if(category!=null){
-            if(categories.contains(category)){
-                if(isRemaining){
-                    return categoriesAmountRemaining.get(category);
-                }else{
-                    return categoriesAmountCompleted.get(category);
+            if(isVanillaCategory){
+                Integer amountVanilla = 0;
+                
+                for (String cat : VANILLA_CATEGORIES) {
+                    amountVanilla += categoriesAmount(categoriesAmountRemaining,categoriesAmountCompleted,isRemaining,cat);
                 }
+                return amountVanilla;
             }else{
-                return null;
+                if(categories.contains(category)){
+                    return categoriesAmount(categoriesAmountRemaining,categoriesAmountCompleted,isRemaining,category);
+                }else{
+                    return null;
+                }                
             }
         }else{
             if(isRemaining){
@@ -437,6 +443,13 @@ public class Advancements extends PlaceholderExpansion{
             }else{
                 return completedAmountAll;
             }
+        }
+    }
+    public static Integer categoriesAmount(HashMap<String,Integer> categoriesAmountRemaining,HashMap<String,Integer> categoriesAmountCompleted,boolean isRemaining, String category){
+        if(isRemaining){
+            return categoriesAmountRemaining.get(category);
+        }else{
+            return categoriesAmountCompleted.get(category);
         }
     }
     //Check if player found
