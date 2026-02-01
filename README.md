@@ -48,6 +48,7 @@ If you see that I do not answer, contact me through my [discord server](https://
   - adventure
   - end
   - husbandry
+  - vanilla: All sum of nether, story, adventure, end and husbandry
 * `%Advancements_playerCompletedAmount_<player>%`
   
   Equal to `%Advancements_completedAmount%` just for another player
@@ -65,6 +66,7 @@ If you see that I do not answer, contact me through my [discord server](https://
   - adventure
   - end
   - husbandry
+  - vanilla: All sum of nether, story, adventure, end and husbandry
 * `%Advancements_playerRemainingAmount_<player>%`
   
   Equal to `%Advancements_remainingAmount%` just for another player

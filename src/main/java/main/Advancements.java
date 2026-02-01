@@ -445,6 +445,7 @@ public class Advancements extends PlaceholderExpansion{
             }
         }
     }
+    //Return amount categories for not repeat code
     public static Integer categoriesAmount(HashMap<String,Integer> categoriesAmountRemaining,HashMap<String,Integer> categoriesAmountCompleted,boolean isRemaining, String category){
         if(isRemaining){
             return categoriesAmountRemaining.get(category);
