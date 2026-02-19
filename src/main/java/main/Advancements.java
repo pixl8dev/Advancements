@@ -13,6 +13,10 @@ import org.bukkit.entity.Player;
 public class Advancements extends PlaceholderExpansion{
 
     private static final List<String> VANILLA_CATEGORIES = Arrays.asList("nether","story","adventure","end","husbandry");
+    private static final long ADVANCEMENT_CACHE_TTL_MILLIS = 30_000L;
+    private static volatile long advancementCacheExpiresAt = 0L;
+    private static volatile List<Advancement> nonRecipeAdvancementsCache = Collections.emptyList();
+    private static volatile Map<String, Advancement> advancementByKeyCache = Collections.emptyMap();
     /**
      * This method should always return true unless we
      * have a dependency we need to make sure is on the server
@@ -276,7 +280,7 @@ public class Advancements extends PlaceholderExpansion{
                     Integer amount=amountAdvancements(Bukkit.getPlayer(player.getUniqueId()));
                     return String.valueOf(amount);
                 }else{
-                    Integer amount=amountAdvancements(Bukkit.getPlayer(player.getUniqueId()),true,iden_new);
+                    Integer amount=amountAdvancements(Bukkit.getPlayer(player.getUniqueId()),false,iden_new);
                     if(amount==null){
                         return "CATEGORY_NOT_FOUND";
                     }else{
@@ -292,7 +296,7 @@ public class Advancements extends PlaceholderExpansion{
                     alone=false;
                 }
                 if(alone){
-                    Integer amount=amountAdvancements(Bukkit.getPlayer(player.getUniqueId()));
+                    Integer amount=amountAdvancements(Bukkit.getPlayer(player.getUniqueId()),true);
                     return String.valueOf(amount);
                 }else{
                     Integer amount=amountAdvancements(Bukkit.getPlayer(player.getUniqueId()),true,iden_new);
@@ -328,50 +332,39 @@ public class Advancements extends PlaceholderExpansion{
     }
     //Return list advancements order by categories/type advancements
     public static List<String> getAdvancements(){
-        List<String> advancements=new ArrayList<String>();
-        List<String> categories=new ArrayList<String>();
+        ensureAdvancementCache();
+        List<String> advancements = new ArrayList<String>();
+        LinkedHashMap<String, List<String>> categoryAdvancements = new LinkedHashMap<String, List<String>>();
 
-        List<Advancement> advancementsList = new ArrayList<>();
-        Bukkit.getServer().advancementIterator().forEachRemaining(advancementsList::add);
-
-        //Obtain different type/categories advancements
-        for (Advancement adv : advancementsList) {
+        for (Advancement adv : nonRecipeAdvancementsCache) {
             String key = adv.getKey().getKey();
-            //Advancement contain too recipes unlocked. Ignored
-            if (!key.toLowerCase().startsWith("recipes")) {
-                String parent = getCategory(key);
-                if (!categories.contains(parent)) {
-                    categories.add(parent);
-                }
+            String category = getCategory(key);
+            List<String> keys = categoryAdvancements.get(category);
+            if (keys == null) {
+                keys = new ArrayList<String>();
+                categoryAdvancements.put(category, keys);
             }
+            keys.add(key);
         }
-        //Get all advancements and order by categories
-        for (Advancement adv : advancementsList) {
-            String key = adv.getKey().getKey();
 
-            //Ignore recipes again
-            if (key.toLowerCase().startsWith("recipes")) {
-                continue;
-            }
-
-            for (String category : categories) {
-                if (key.startsWith(category)) {
-                    advancements.add(key);
-                }
-            }
+        for (List<String> keys : categoryAdvancements.values()) {
+            advancements.addAll(keys);
         }
         return advancements;
     }
     // Return all advancements serialize.
     // Format: <advancement_name>;<if_player_have_advancement>, . . .
     public static String listAdvancements(Player player) throws NoPlayerOnline{
-        List<String> advancements=getAdvancements();
-        String returnString="";
-        for(String ah : advancements){
-            returnString+=ah+";"+String.valueOf(hasAdvancement(player,ah));
-            returnString+=",";
+        if (player == null) {
+            throw new NoPlayerOnline();
         }
-        return returnString;
+        ensureAdvancementCache();
+        StringBuilder returnString = new StringBuilder();
+        for (Advancement adv : nonRecipeAdvancementsCache) {
+            String key = adv.getKey().getKey();
+            returnString.append(key).append(";").append(hasAdvancement(player, adv)).append(",");
+        }
+        return returnString.toString();
     }
     public static Integer amountAdvancements(Player player) throws NoPlayerOnline{
         return amountAdvancements(player,false,null);
@@ -381,6 +374,9 @@ public class Advancements extends PlaceholderExpansion{
     }
     //Return amount advancements
     public static Integer amountAdvancements(Player player,boolean isRemaining,String category) throws NoPlayerOnline{
+        if (player == null) {
+            throw new NoPlayerOnline();
+        }
         //Why no use getAdvancements()?
         //For amount of loops, and it is not necessary to order them
         int completedAmountAll=0;
@@ -388,24 +384,18 @@ public class Advancements extends PlaceholderExpansion{
         Set<String> categories=new HashSet<>();
         HashMap<String,Integer> categoriesAmountCompleted=new HashMap<>();
         HashMap<String,Integer> categoriesAmountRemaining=new HashMap<>();
-        boolean isVanillaCategory = category.equalsIgnoreCase("vanilla");
+        String categoryLookup = category == null ? null : category.toLowerCase(Locale.ROOT);
+        boolean isVanillaCategory = "vanilla".equals(categoryLookup);
 
-        List<Advancement> advancements = new ArrayList<>();
-        Bukkit.getServer().advancementIterator().forEachRemaining(advancements::add);
-
+        ensureAdvancementCache();
         //Only 1 loop and sum amount
-        for (Advancement adv : advancements) {
+        for (Advancement adv : nonRecipeAdvancementsCache) {
             String key=adv.getKey().getKey();
 
-            //Ignore recipes before check isComplete
-            if(key.toLowerCase().startsWith("recipes")){
-                continue;
-            }
-
-            boolean isComplete = hasAdvancement(player,adv);
+            boolean isComplete = Boolean.TRUE.equals(hasAdvancement(player,adv));
 
             //Added categories
-            String cat = getCategory(key);
+            String cat = getCategory(key).toLowerCase(Locale.ROOT);
             categories.add(cat);
 
             Integer completed = categoriesAmountCompleted.getOrDefault(cat, 0);
@@ -431,8 +421,8 @@ public class Advancements extends PlaceholderExpansion{
                 }
                 return amountVanilla;
             }else{
-                if(categories.contains(category)){
-                    return categoriesAmount(categoriesAmountRemaining,categoriesAmountCompleted,isRemaining,category);
+                if(categories.contains(categoryLookup)){
+                    return categoriesAmount(categoriesAmountRemaining,categoriesAmountCompleted,isRemaining,categoryLookup);
                 }else{
                     return null;
                 }                
@@ -447,11 +437,13 @@ public class Advancements extends PlaceholderExpansion{
     }
     //Return amount categories for not repeat code
     public static Integer categoriesAmount(HashMap<String,Integer> categoriesAmountRemaining,HashMap<String,Integer> categoriesAmountCompleted,boolean isRemaining, String category){
+        Integer amount;
         if(isRemaining){
-            return categoriesAmountRemaining.get(category);
+            amount = categoriesAmountRemaining.get(category);
         }else{
-            return categoriesAmountCompleted.get(category);
+            amount = categoriesAmountCompleted.get(category);
         }
+        return amount == null ? 0 : amount;
     }
     //Check if player found
     public static boolean checkPlayerFound(String plName, OfflinePlayer player,OfflinePlayer p){
@@ -472,13 +464,14 @@ public class Advancements extends PlaceholderExpansion{
     }
     //Check if player have advancement
     public static Boolean hasAdvancement(Player player, String achname) throws NoPlayerOnline{
-        Advancement ach = null;
-        for (Iterator<Advancement> iter = Bukkit.getServer().advancementIterator(); iter.hasNext(); ) {
-            Advancement adv = iter.next();
-            if (adv.getKey().getKey().trim().equalsIgnoreCase(achname.trim())){
-                ach = adv;
-                break;
-            }
+        if (achname == null) {
+            return null;
+        }
+        ensureAdvancementCache();
+        Advancement ach = advancementByKeyCache.get(achname.trim().toLowerCase(Locale.ROOT));
+        if (ach == null) {
+            ensureAdvancementCache(true);
+            ach = advancementByKeyCache.get(achname.trim().toLowerCase(Locale.ROOT));
         }
         return hasAdvancement(player, ach);
     }
@@ -486,6 +479,9 @@ public class Advancements extends PlaceholderExpansion{
     public static Boolean hasAdvancement(Player player, Advancement advancement) throws NoPlayerOnline {
         if (player == null) {
             throw new NoPlayerOnline();
+        }
+        if (advancement == null) {
+            return null;
         }
 
         AdvancementProgress advancementProgress;
@@ -498,17 +494,37 @@ public class Advancements extends PlaceholderExpansion{
     }
     //Get offline player if has entered the server
     public static OfflinePlayer getOfflinePlayer(final String playerStr, final boolean isUUID) {
-        OfflinePlayer[] offlinePlayers;
-        for (int length = (offlinePlayers = Bukkit.getOfflinePlayers()).length, i = 0; i < length; ++i) {
-            final OfflinePlayer p = offlinePlayers[i];
-            if (isUUID && p.getUniqueId().toString().equalsIgnoreCase(playerStr)) {
-                return p;
-            }
-            if (p.getName().equalsIgnoreCase(playerStr)) {
-                return p;
+        if (playerStr == null || playerStr.trim().isEmpty()) {
+            return null;
+        }
+        String lookup = playerStr.trim();
+
+        if (isUUID || looksLikeUuid(lookup)) {
+            try {
+                UUID uuid = UUID.fromString(lookup);
+                Player online = Bukkit.getPlayer(uuid);
+                if (online != null) {
+                    return online;
+                }
+                return Bukkit.getOfflinePlayer(uuid);
+            } catch (IllegalArgumentException ignored) {
+                return null;
             }
         }
-        return null;
+
+        Player online = Bukkit.getPlayerExact(lookup);
+        if (online != null) {
+            return online;
+        }
+
+        for (Player candidate : Bukkit.getOnlinePlayers()) {
+            String candidateName = candidate.getName();
+            if (candidateName != null && candidateName.equalsIgnoreCase(lookup)) {
+                return candidate;
+            }
+        }
+
+        return Bukkit.getOfflinePlayer(lookup);
     }
 
     //Get valid key part by index for optimize split operation
@@ -519,6 +535,54 @@ public class Advancements extends PlaceholderExpansion{
         }
 
         return key.substring(0, index);
+    }
+
+    private static boolean looksLikeUuid(String value) {
+        if (value == null || value.length() != 36) {
+            return false;
+        }
+        return value.charAt(8) == '-'
+                && value.charAt(13) == '-'
+                && value.charAt(18) == '-'
+                && value.charAt(23) == '-';
+    }
+
+    private static void ensureAdvancementCache() {
+        ensureAdvancementCache(false);
+    }
+
+    private static void ensureAdvancementCache(boolean forceRefresh) {
+        long now = System.currentTimeMillis();
+        if (!forceRefresh && now < advancementCacheExpiresAt && !advancementByKeyCache.isEmpty()) {
+            return;
+        }
+        synchronized (Advancements.class) {
+            now = System.currentTimeMillis();
+            if (!forceRefresh && now < advancementCacheExpiresAt && !advancementByKeyCache.isEmpty()) {
+                return;
+            }
+
+            List<Advancement> nonRecipe = new ArrayList<Advancement>();
+            Map<String, Advancement> byKey = new HashMap<String, Advancement>();
+            Iterator<Advancement> iterator = Bukkit.getServer().advancementIterator();
+
+            while (iterator.hasNext()) {
+                Advancement adv = iterator.next();
+                String key = adv.getKey().getKey();
+                String namespacedKey = adv.getKey().toString();
+
+                byKey.put(key.toLowerCase(Locale.ROOT), adv);
+                byKey.put(namespacedKey.toLowerCase(Locale.ROOT), adv);
+
+                if (!key.toLowerCase(Locale.ROOT).startsWith("recipes")) {
+                    nonRecipe.add(adv);
+                }
+            }
+
+            nonRecipeAdvancementsCache = nonRecipe;
+            advancementByKeyCache = byKey;
+            advancementCacheExpiresAt = now + ADVANCEMENT_CACHE_TTL_MILLIS;
+        }
     }
 }
 class NoPlayerOnline extends Exception{
