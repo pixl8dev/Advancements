@@ -1,5 +1,6 @@
 package main;
 import java.util.*;
+import java.lang.reflect.Method;
 
 import me.clip.placeholderapi.PlaceholderAPI;
 import org.bukkit.OfflinePlayer;
@@ -15,11 +16,14 @@ public class Advancements extends PlaceholderExpansion{
 
     private static final List<String> VANILLA_CATEGORIES = Arrays.asList("nether","story","adventure","end","husbandry");
     private static final long ADVANCEMENT_CACHE_TTL_MILLIS = 30_000L;
-    private static final long PLAYER_LOOKUP_CACHE_TTL_MILLIS = 60_000L;
+    private static final long PLAYER_LOOKUP_CACHE_HIT_TTL_MILLIS = 300_000L;
+    private static final long PLAYER_LOOKUP_CACHE_MISS_TTL_MILLIS = 10_000L;
     private static volatile long advancementCacheExpiresAt = 0L;
     private static volatile List<Advancement> nonRecipeAdvancementsCache = Collections.emptyList();
     private static volatile Map<String, Advancement> advancementByKeyCache = Collections.emptyMap();
     private static final Map<String, CachedPlayerLookup> playerLookupCache = new ConcurrentHashMap<String, CachedPlayerLookup>();
+    private static volatile Method offlinePlayerIfCachedMethod;
+    private static volatile boolean offlinePlayerIfCachedMethodResolved;
     /**
      * This method should always return true unless we
      * have a dependency we need to make sure is on the server
@@ -492,6 +496,7 @@ public class Advancements extends PlaceholderExpansion{
             return null;
         }
         String lookup = playerStr.trim();
+        String cacheKey = lookup.toLowerCase(Locale.ROOT);
 
         if (isUUID || looksLikeUuid(lookup)) {
             try {
@@ -508,17 +513,18 @@ public class Advancements extends PlaceholderExpansion{
 
         Player online = Bukkit.getPlayerExact(lookup);
         if (online != null) {
+            cachePlayerLookup(cacheKey, online.getUniqueId(), true, PLAYER_LOOKUP_CACHE_HIT_TTL_MILLIS);
             return online;
         }
 
         for (Player candidate : Bukkit.getOnlinePlayers()) {
             String candidateName = candidate.getName();
             if (candidateName != null && candidateName.equalsIgnoreCase(lookup)) {
-                cachePlayerLookup(lookup, candidate.getUniqueId(), true);
+                cachePlayerLookup(cacheKey, candidate.getUniqueId(), true, PLAYER_LOOKUP_CACHE_HIT_TTL_MILLIS);
                 return candidate;
             }
         }
-        String cacheKey = lookup.toLowerCase(Locale.ROOT);
+
         CachedPlayerLookup cached = playerLookupCache.get(cacheKey);
         long now = System.currentTimeMillis();
         if (cached != null && now < cached.expiresAtMillis) {
@@ -528,20 +534,52 @@ public class Advancements extends PlaceholderExpansion{
             return Bukkit.getOfflinePlayer(cached.uuid);
         }
 
-        OfflinePlayer[] knownPlayers = Bukkit.getOfflinePlayers();
-        for (OfflinePlayer known : knownPlayers) {
-            String knownName = known.getName();
-            if (knownName != null && knownName.equalsIgnoreCase(lookup)) {
-                cachePlayerLookup(cacheKey, known.getUniqueId(), true);
-                return known;
-            }
+        OfflinePlayer cachedByServer = getOfflinePlayerIfCached(lookup);
+        if (cachedByServer != null) {
+            cachePlayerLookup(cacheKey, cachedByServer.getUniqueId(), true, PLAYER_LOOKUP_CACHE_HIT_TTL_MILLIS);
+            return cachedByServer;
         }
-        cachePlayerLookup(cacheKey, null, false);
+
+        cachePlayerLookup(cacheKey, null, false, PLAYER_LOOKUP_CACHE_MISS_TTL_MILLIS);
         return null;
     }
 
-    private static void cachePlayerLookup(String cacheKey, UUID uuid, boolean found) {
-        playerLookupCache.put(cacheKey.toLowerCase(Locale.ROOT), new CachedPlayerLookup(uuid, found, System.currentTimeMillis() + PLAYER_LOOKUP_CACHE_TTL_MILLIS));
+    private static void cachePlayerLookup(String cacheKey, UUID uuid, boolean found, long ttlMillis) {
+        playerLookupCache.put(cacheKey, new CachedPlayerLookup(uuid, found, System.currentTimeMillis() + ttlMillis));
+    }
+
+    private static OfflinePlayer getOfflinePlayerIfCached(String playerName) {
+        resolveOfflinePlayerIfCachedMethod();
+        Method method = offlinePlayerIfCachedMethod;
+        if (method == null) {
+            return null;
+        }
+        try {
+            Object result = method.invoke(Bukkit.getServer(), playerName);
+            if (result instanceof OfflinePlayer) {
+                return (OfflinePlayer) result;
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+        return null;
+    }
+
+    private static void resolveOfflinePlayerIfCachedMethod() {
+        if (offlinePlayerIfCachedMethodResolved) {
+            return;
+        }
+        synchronized (Advancements.class) {
+            if (offlinePlayerIfCachedMethodResolved) {
+                return;
+            }
+            try {
+                offlinePlayerIfCachedMethod = Bukkit.getServer().getClass().getMethod("getOfflinePlayerIfCached", String.class);
+            } catch (NoSuchMethodException ignored) {
+                offlinePlayerIfCachedMethod = null;
+            }
+            offlinePlayerIfCachedMethodResolved = true;
+        }
     }
 
     private static final class CachedPlayerLookup {
