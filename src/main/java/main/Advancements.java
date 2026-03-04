@@ -9,14 +9,17 @@ import org.bukkit.ChatColor;
 import org.bukkit.advancement.Advancement;
 import org.bukkit.advancement.AdvancementProgress;
 import org.bukkit.entity.Player;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Advancements extends PlaceholderExpansion{
 
     private static final List<String> VANILLA_CATEGORIES = Arrays.asList("nether","story","adventure","end","husbandry");
     private static final long ADVANCEMENT_CACHE_TTL_MILLIS = 30_000L;
+    private static final long PLAYER_LOOKUP_CACHE_TTL_MILLIS = 60_000L;
     private static volatile long advancementCacheExpiresAt = 0L;
     private static volatile List<Advancement> nonRecipeAdvancementsCache = Collections.emptyList();
     private static volatile Map<String, Advancement> advancementByKeyCache = Collections.emptyMap();
+    private static final Map<String, CachedPlayerLookup> playerLookupCache = new ConcurrentHashMap<String, CachedPlayerLookup>();
     /**
      * This method should always return true unless we
      * have a dependency we need to make sure is on the server
@@ -447,16 +450,7 @@ public class Advancements extends PlaceholderExpansion{
     }
     //Check if player found
     public static boolean checkPlayerFound(String plName, OfflinePlayer player,OfflinePlayer p){
-        if(player==null){
-            p=getOfflinePlayer(plName,false);
-            if(p==null){
-                return false;
-            }
-        }
-        if(p==null){
-            return false;
-        }
-        return true;
+        return p != null;
     }
     //Parse advancements list and formatted
     public static String formating(String listAdvan){
@@ -520,11 +514,46 @@ public class Advancements extends PlaceholderExpansion{
         for (Player candidate : Bukkit.getOnlinePlayers()) {
             String candidateName = candidate.getName();
             if (candidateName != null && candidateName.equalsIgnoreCase(lookup)) {
+                cachePlayerLookup(lookup, candidate.getUniqueId(), true);
                 return candidate;
             }
         }
+        String cacheKey = lookup.toLowerCase(Locale.ROOT);
+        CachedPlayerLookup cached = playerLookupCache.get(cacheKey);
+        long now = System.currentTimeMillis();
+        if (cached != null && now < cached.expiresAtMillis) {
+            if (!cached.found || cached.uuid == null) {
+                return null;
+            }
+            return Bukkit.getOfflinePlayer(cached.uuid);
+        }
 
-        return Bukkit.getOfflinePlayer(lookup);
+        OfflinePlayer[] knownPlayers = Bukkit.getOfflinePlayers();
+        for (OfflinePlayer known : knownPlayers) {
+            String knownName = known.getName();
+            if (knownName != null && knownName.equalsIgnoreCase(lookup)) {
+                cachePlayerLookup(cacheKey, known.getUniqueId(), true);
+                return known;
+            }
+        }
+        cachePlayerLookup(cacheKey, null, false);
+        return null;
+    }
+
+    private static void cachePlayerLookup(String cacheKey, UUID uuid, boolean found) {
+        playerLookupCache.put(cacheKey.toLowerCase(Locale.ROOT), new CachedPlayerLookup(uuid, found, System.currentTimeMillis() + PLAYER_LOOKUP_CACHE_TTL_MILLIS));
+    }
+
+    private static final class CachedPlayerLookup {
+        private final UUID uuid;
+        private final boolean found;
+        private final long expiresAtMillis;
+
+        private CachedPlayerLookup(UUID uuid, boolean found, long expiresAtMillis) {
+            this.uuid = uuid;
+            this.found = found;
+            this.expiresAtMillis = expiresAtMillis;
+        }
     }
 
     //Get valid key part by index for optimize split operation
